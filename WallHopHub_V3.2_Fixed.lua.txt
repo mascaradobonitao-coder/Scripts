@@ -1,0 +1,434 @@
+-- ============================================================
+--  TopoOp Wall Hop Hub v3.2 - BOTÕES VISÍVEIS
+--  Gira 45° a cada pulo na parede (SEM COOLDOWN)
+-- ============================================================
+
+if not game:GetService("RunService"):IsClient() then
+    warn("❌ Deve rodar como LocalScript!")
+    return
+end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- ============================================================
+-- CONFIG
+-- ============================================================
+local CONFIG = {
+    VALID_KEY = "TopoOp-ofc_mohd",
+    KEY_FILE = "TopoOpWH_Key.txt",
+    OWNER_NAME = "TopoOp_ofc_mohd",
+    DEGREE = 45,
+    WALL_DIST = 3.5,
+    SMOOTH_TIME = 0.15,
+}
+
+-- ============================================================
+-- UTILITÁRIOS DE ARQUIVO
+-- ============================================================
+local function safeWrite(path, data)
+    pcall(function() writefile(path, data) end)
+end
+
+local function safeRead(path)
+    local ok, data = pcall(readfile, path)
+    return ok and data or nil
+end
+
+-- ============================================================
+-- ESTADO
+-- ============================================================
+local State = {
+    keyValid = false,
+    enabled = true,
+    degree = CONFIG.DEGREE,
+    isOnWall = false,
+}
+
+-- ============================================================
+-- DETECÇÃO DE PAREDE (Raycast)
+-- ============================================================
+local function detectWall()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {char}
+    params.FilterType = Enum.RaycastFilterType.Exclude
+
+    local dirs = {hrp.CFrame.RightVector, -hrp.CFrame.RightVector}
+
+    for _, dir in ipairs(dirs) do
+        local result = workspace:Raycast(hrp.Position, dir * CONFIG.WALL_DIST, params)
+        if result then return true end
+    end
+    return false
+end
+
+-- ============================================================
+-- ROTAÇÃO DE CÂMERA (SEM TASK)
+-- ============================================================
+local function rotateCamera(deg)
+    local cam = workspace.CurrentCamera
+    local cf = cam.CFrame
+    local pos = cf.Position
+    local look = cf.LookVector
+
+    local yaw = math.atan2(-look.X, -look.Z)
+    local pitch = math.atan2(look.Y, Vector2.new(look.X, look.Z).Magnitude)
+
+    local newYaw = yaw + math.rad(deg)
+
+    local targetCF = CFrame.new(pos)
+        * CFrame.Angles(0, newYaw, 0)
+        * CFrame.Angles(pitch, 0, 0)
+
+    local start = tick()
+    local duration = CONFIG.SMOOTH_TIME
+
+    local con
+    con = RunService.RenderStepped:Connect(function()
+        if not con.Connected then return end
+        
+        local t = (tick() - start) / duration
+        if t >= 1 then
+            t = 1
+            con:Disconnect()
+        end
+        workspace.CurrentCamera.CFrame = cf:Lerp(targetCF, t)
+    end)
+end
+
+-- ============================================================
+-- LOOP PRINCIPAL (EVENT-DRIVEN, SEM TASK)
+-- ============================================================
+local function startWallHopLoop()
+    local hum = nil
+
+    local function getHum()
+        local char = LocalPlayer.Character
+        if char then
+            hum = char:FindFirstChildOfClass("Humanoid")
+        end
+    end
+
+    getHum()
+    LocalPlayer.CharacterAdded:Connect(function()
+        getHum()
+        State.isOnWall = false
+    end)
+
+    if not hum then return end
+
+    -- ✅ A CADA PULO, SE ESTÁ NA PAREDE, GIRA A CÂMERA
+    hum.StateChanged:Connect(function(_, newState)
+        if not State.keyValid or not State.enabled then return end
+
+        if newState == Enum.HumanoidStateType.Jumping then
+            if detectWall() then
+                State.isOnWall = true
+                rotateCamera(State.degree)
+            end
+        else
+            State.isOnWall = false
+        end
+    end)
+end
+
+-- ============================================================
+-- GUI - TELA DE CARREGAMENTO
+-- ============================================================
+local function createLoadingScreen()
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "TopoOpLoading"
+    gui.IgnoreGuiInset = true
+    gui.ResetOnSpawn = false
+    gui.Parent = PlayerGui
+
+    local bg = Instance.new("Frame", gui)
+    bg.Size = UDim2.fromScale(1, 1)
+    bg.BackgroundColor3 = Color3.fromRGB(5, 5, 12)
+    bg.BorderSizePixel = 0
+
+    local title = Instance.new("TextLabel", bg)
+    title.Size = UDim2.new(1, 0, 1, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "⚡ TopoOp Wall Hop Hub v3.2"
+    title.TextColor3 = Color3.fromRGB(0, 200, 255)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 28
+
+    task.wait(1.5)
+    TweenService:Create(bg, TweenInfo.new(0.5), {BackgroundTransparency = 1}):Play()
+    TweenService:Create(title, TweenInfo.new(0.5), {TextTransparency = 1}):Play()
+    task.wait(0.6)
+    gui:Destroy()
+end
+
+-- ============================================================
+-- GUI - TELA DE KEY (CORRIGIDA - BOTÕES VISÍVEIS)
+-- ============================================================
+local function createKeyScreen(onSuccess)
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "TopoOpKey"
+    gui.IgnoreGuiInset = true
+    gui.ResetOnSpawn = false
+    gui.Parent = PlayerGui
+
+    local overlay = Instance.new("Frame", gui)
+    overlay.Size = UDim2.fromScale(1, 1)
+    overlay.BackgroundColor3 = Color3.fromRGB(5, 5, 12)
+    overlay.BorderSizePixel = 0
+
+    -- ✅ CARD COM ALTURA ADEQUADA
+    local card = Instance.new("Frame", overlay)
+    card.Size = UDim2.new(0, 380, 0, 320)  -- Aumentado para 320
+    card.Position = UDim2.new(0.5, -190, 0.5, -160)
+    card.BackgroundColor3 = Color3.fromRGB(12, 12, 28)
+    card.BorderSizePixel = 0
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
+
+    local stroke = Instance.new("UIStroke", card)
+    stroke.Color = Color3.fromRGB(0, 150, 255)
+    stroke.Thickness = 2
+
+    -- ========== TÍTULO ==========
+    local title = Instance.new("TextLabel", card)
+    title.Size = UDim2.new(1, 0, 0, 40)
+    title.Position = UDim2.new(0, 0, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "🔑 Insira sua Key"
+    title.TextColor3 = Color3.fromRGB(0, 200, 255)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 18
+
+    -- ========== DESCRIÇÃO ==========
+    local desc = Instance.new("TextLabel", card)
+    desc.Size = UDim2.new(0.9, 0, 0, 24)
+    desc.Position = UDim2.new(0.05, 0, 0, 40)
+    desc.BackgroundTransparency = 1
+    desc.Text = "Acesse o site para obter sua Key"
+    desc.TextColor3 = Color3.fromRGB(130, 130, 180)
+    desc.Font = Enum.Font.Gotham
+    desc.TextSize = 12
+
+    -- ========== CAMPO DE INPUT ==========
+    local input = Instance.new("TextBox", card)
+    input.Size = UDim2.new(0.85, 0, 0, 40)
+    input.Position = UDim2.new(0.075, 0, 0, 68)
+    input.BackgroundColor3 = Color3.fromRGB(18, 18, 36)
+    input.BorderSizePixel = 0
+    input.PlaceholderText = "Cole sua Key aqui..."
+    input.TextColor3 = Color3.fromRGB(220, 220, 255)
+    input.PlaceholderColor3 = Color3.fromRGB(80, 80, 120)
+    input.Font = Enum.Font.GothamMono
+    input.TextSize = 13
+    Instance.new("UICorner", input).CornerRadius = UDim.new(0, 8)
+
+    -- ========== MENSAGEM DE FEEDBACK ==========
+    local msgLbl = Instance.new("TextLabel", card)
+    msgLbl.Size = UDim2.new(1, 0, 0, 20)
+    msgLbl.Position = UDim2.new(0, 0, 0, 116)
+    msgLbl.BackgroundTransparency = 1
+    msgLbl.Text = ""
+    msgLbl.Font = Enum.Font.Gotham
+    msgLbl.TextSize = 12
+
+    -- ========== BOTÃO VERIFICAR (ESQUERDA) ==========
+    local verifyBtn = Instance.new("TextButton", card)
+    verifyBtn.Size = UDim2.new(0.4, 0, 0, 40)
+    verifyBtn.Position = UDim2.new(0.075, 0, 0, 144)
+    verifyBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 100)
+    verifyBtn.Text = "✓ Verificar"
+    verifyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    verifyBtn.Font = Enum.Font.GothamBold
+    verifyBtn.TextSize = 14
+    verifyBtn.BorderSizePixel = 0
+    Instance.new("UICorner", verifyBtn).CornerRadius = UDim.new(0, 8)
+
+    -- ========== BOTÃO LIMPAR (DIREITA) ==========
+    local clearBtn = Instance.new("TextButton", card)
+    clearBtn.Size = UDim2.new(0.4, 0, 0, 40)
+    clearBtn.Position = UDim2.new(0.525, 0, 0, 144)
+    clearBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 120)
+    clearBtn.Text = "🗑 Limpar"
+    clearBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    clearBtn.Font = Enum.Font.GothamBold
+    clearBtn.TextSize = 14
+    clearBtn.BorderSizePixel = 0
+    Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 8)
+
+    -- ========== DIVIDER ==========
+    local divider = Instance.new("Frame", card)
+    divider.Size = UDim2.new(0.9, 0, 0, 1)
+    divider.Position = UDim2.new(0.05, 0, 0, 194)
+    divider.BackgroundColor3 = Color3.fromRGB(30, 30, 55)
+    divider.BorderSizePixel = 0
+
+    -- ========== INFO BOX ==========
+    local infoBox = Instance.new("Frame", card)
+    infoBox.Size = UDim2.new(0.9, 0, 0, 90)
+    infoBox.Position = UDim2.new(0.05, 0, 0, 205)
+    infoBox.BackgroundColor3 = Color3.fromRGB(20, 20, 40)
+    infoBox.BorderSizePixel = 0
+    Instance.new("UICorner", infoBox).CornerRadius = UDim.new(0, 8)
+
+    local infoLbl = Instance.new("TextLabel", infoBox)
+    infoLbl.Size = UDim2.new(1, 0, 1, 0)
+    infoLbl.BackgroundTransparency = 1
+    infoLbl.Text = "💡 Key de Teste:\nTopoOp-ofc_mohd\n\n⚡ Clique em Verificar ou pressione Enter"
+    infoLbl.TextColor3 = Color3.fromRGB(150, 200, 255)
+    infoLbl.Font = Enum.Font.Gotham
+    infoLbl.TextSize = 11
+    infoLbl.TextWrapped = true
+
+    -- ========== FUNÇÃO VERIFICAR ==========
+    local function verifyKey()
+        local k = input.Text:gsub("%s", "")
+        if k == "" then
+            msgLbl.Text = "⚠️ Digite uma Key!"
+            msgLbl.TextColor3 = Color3.fromRGB(255, 200, 80)
+            return
+        end
+
+        if k == CONFIG.VALID_KEY then
+            msgLbl.Text = "✅ Key válida! Salvando..."
+            msgLbl.TextColor3 = Color3.fromRGB(100, 255, 100)
+            safeWrite(CONFIG.KEY_FILE, k)
+            task.wait(1)
+            gui:Destroy()
+            onSuccess()
+        else
+            msgLbl.Text = "❌ Key inválida! Tente novamente."
+            msgLbl.TextColor3 = Color3.fromRGB(255, 100, 100)
+        end
+    end
+
+    -- ========== EVENTOS ==========
+    verifyBtn.MouseButton1Click:Connect(verifyKey)
+    clearBtn.MouseButton1Click:Connect(function()
+        input.Text = ""
+        msgLbl.Text = ""
+    end)
+
+    -- Pressionar Enter para verificar
+    input.FocusLost:Connect(function(enterPressed)
+        if enterPressed then
+            verifyKey()
+        end
+    end)
+end
+
+-- ============================================================
+-- GUI - HUB PRINCIPAL
+-- ============================================================
+local function createMainHub()
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "TopoOpHub"
+    gui.ResetOnSpawn = false
+    gui.Parent = PlayerGui
+
+    local win = Instance.new("Frame", gui)
+    win.Size = UDim2.new(0, 300, 0, 200)
+    win.Position = UDim2.new(0, 20, 0.5, -100)
+    win.BackgroundColor3 = Color3.fromRGB(10, 10, 22)
+    win.BorderSizePixel = 0
+    win.Active = true
+    win.Draggable = true
+    Instance.new("UICorner", win).CornerRadius = UDim.new(0, 12)
+
+    local stroke = Instance.new("UIStroke", win)
+    stroke.Color = Color3.fromRGB(0, 150, 255)
+    stroke.Thickness = 1.5
+
+    -- Header
+    local header = Instance.new("Frame", win)
+    header.Size = UDim2.new(1, 0, 0, 40)
+    header.BackgroundColor3 = Color3.fromRGB(0, 120, 200)
+    header.BorderSizePixel = 0
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
+
+    local hFix = Instance.new("Frame", header)
+    hFix.Size = UDim2.new(1, 0, 0.5, 0)
+    hFix.Position = UDim2.new(0, 0, 0.5, 0)
+    hFix.BackgroundColor3 = Color3.fromRGB(0, 120, 200)
+    hFix.BorderSizePixel = 0
+
+    local htitle = Instance.new("TextLabel", header)
+    htitle.Size = UDim2.new(1, 0, 1, 0)
+    htitle.BackgroundTransparency = 1
+    htitle.Text = "⚡ Wall Hop v3.2"
+    htitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    htitle.Font = Enum.Font.GothamBold
+    htitle.TextSize = 16
+
+    -- Status
+    local statusLbl = Instance.new("TextLabel", win)
+    statusLbl.Size = UDim2.new(0.9, 0, 0, 25)
+    statusLbl.Position = UDim2.new(0.05, 0, 0, 50)
+    statusLbl.BackgroundTransparency = 1
+    statusLbl.Text = "● Status: Ativo ✓"
+    statusLbl.TextColor3 = Color3.fromRGB(100, 255, 100)
+    statusLbl.Font = Enum.Font.GothamMono
+    statusLbl.TextSize = 12
+    statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Info
+    local infoLbl = Instance.new("TextLabel", win)
+    infoLbl.Size = UDim2.new(0.9, 0, 0, 50)
+    infoLbl.Position = UDim2.new(0.05, 0, 0, 80)
+    infoLbl.BackgroundTransparency = 1
+    infoLbl.Text = "💡 Pule na parede!\n🔄 Câmera gira 45° por pulo\n⚙️ Sem cooldown!"
+    infoLbl.TextColor3 = Color3.fromRGB(150, 200, 255)
+    infoLbl.Font = Enum.Font.Gotham
+    infoLbl.TextSize = 11
+    infoLbl.TextXAlignment = Enum.TextXAlignment.Left
+    infoLbl.TextWrapped = true
+
+    -- Atualiza status de parede em tempo real
+    RunService.Heartbeat:Connect(function()
+        if State.isOnWall then
+            statusLbl.Text = "● Parede: DETECTADA ✓"
+            statusLbl.TextColor3 = Color3.fromRGB(0, 255, 100)
+        else
+            statusLbl.Text = "● Parede: Não detectada"
+            statusLbl.TextColor3 = Color3.fromRGB(100, 150, 200)
+        end
+    end)
+
+    print("✅ Hub carregado!")
+end
+
+-- ============================================================
+-- INICIALIZAÇÃO
+-- ============================================================
+local function init()
+    print("🚀 Wall Hop Hub v3.2 - Iniciando...")
+
+    createLoadingScreen()
+    task.wait(2.1)
+
+    -- Checa Key salva
+    local savedKey = safeRead(CONFIG.KEY_FILE)
+    if savedKey and savedKey:gsub("%s", "") == CONFIG.VALID_KEY then
+        print("✓ Key válida encontrada!")
+        State.keyValid = true
+        createMainHub()
+        startWallHopLoop()
+    else
+        print("⚠️ Key não encontrada, solicitando...")
+        createKeyScreen(function()
+            State.keyValid = true
+            createMainHub()
+            startWallHopLoop()
+        end)
+    end
+end
+
+init()
+print("📌 Wall Hop Hub Pronto! Gire 45° a cada pulo na parede!")
